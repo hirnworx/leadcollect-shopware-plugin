@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="https://raw.githubusercontent.com/shopware/platform/trunk/src/Core/System/SystemConfig/Schema/config.xsd">
+
+    <!-- Original Abandoned Cart Settings -->
+    <card>
+        <title>Abandoned Cart Settings</title>
+        <title lang="de-DE">Warenkorbabbruch Einstellungen</title>
+
+        <input-field type="int">
+            <name>markAbandonedAfter</name>
+            <label>After how many seconds is a cart considered "abandoned"?</label>
+            <label lang="de-DE">Nach wie vielen Sekunden gilt ein Warenkorb als "abgebrochen"?</label>
+            <helpText>
+                This plugin requires the cart settings to be configured properly. 
+                The setting "Time in minutes for a customer to finalize a transaction" 
+                (found in Settings > Cart settings) should always be longer than this setting.
+            </helpText>
+            <helpText lang="de-DE">
+                Diese Einstellung muss kürzer sein als die Shopware-Einstellung
+                "Zeit in Minuten für Kaufabschluss" (unter Einstellungen > Warenkorb).
+            </helpText>
+            <defaultValue>3600</defaultValue>
+        </input-field>
+    </card>
+
+    <!-- LeadCollect Integration -->
+    <card>
+        <title>LeadCollect Integration</title>
+        <title lang="de-DE">LeadCollect Integration</title>
+        
+        <input-field type="bool">
+            <name>leadCollectWebhookEnabled</name>
+            <label>Enable LeadCollect Webhook</label>
+            <label lang="de-DE">LeadCollect Webhook aktivieren</label>
+            <helpText>Send abandoned cart data to LeadCollect for postcard recovery campaigns</helpText>
+            <helpText lang="de-DE">Warenkorbabbrecher-Daten an LeadCollect für Postkarten-Recovery senden</helpText>
+            <defaultValue>false</defaultValue>
+        </input-field>
+
+        <input-field type="url">
+            <name>leadCollectWebhookUrl</name>
+            <label>LeadCollect Webhook URL</label>
+            <label lang="de-DE">LeadCollect Webhook URL</label>
+            <helpText>Base URL for LeadCollect webhook (e.g., https://api.leadcollect.de/api/webhook/ecommerce)</helpText>
+            <helpText lang="de-DE">Basis-URL für den LeadCollect Webhook (z.B. https://api.leadcollect.de/api/webhook/ecommerce)</helpText>
+            <placeholder>https://api.leadcollect.de/api/webhook/ecommerce</placeholder>
+        </input-field>
+
+        <input-field type="password">
+            <name>leadCollectWebhookSecret</name>
+            <label>Webhook Secret</label>
+            <label lang="de-DE">Webhook Secret</label>
+            <helpText>Secret token from your LeadCollect shop connection settings</helpText>
+            <helpText lang="de-DE">Geheimes Token aus Ihren LeadCollect Shop-Verbindungseinstellungen</helpText>
+        </input-field>
+    </card>
+
+    <!-- LeadCollect Coupon Settings -->
+    <card>
+        <title>LeadCollect Coupon Settings</title>
+        <title lang="de-DE">LeadCollect Gutschein Einstellungen</title>
+
+        <input-field type="single-select">
+            <name>leadCollectCouponType</name>
+            <label>Coupon Type</label>
+            <label lang="de-DE">Gutschein-Typ</label>
+            <options>
+                <option>
+                    <id>percentage</id>
+                    <name>Percentage Discount</name>
+                    <name lang="de-DE">Prozent-Rabatt</name>
+                </option>
+                <option>
+                    <id>absolute</id>
+                    <name>Fixed Amount Discount</name>
+                    <name lang="de-DE">Festbetrag-Rabatt</name>
+                </option>
+            </options>
+            <defaultValue>percentage</defaultValue>
+        </input-field>
+
+        <input-field type="float">
+            <name>leadCollectCouponValue</name>
+            <label>Coupon Value</label>
+            <label lang="de-DE">Gutschein-Wert</label>
+            <helpText>Value of the discount (percentage or fixed amount in EUR)</helpText>
+            <helpText lang="de-DE">Wert des Rabatts (Prozent oder Festbetrag in EUR)</helpText>
+            <defaultValue>10</defaultValue>
+        </input-field>
+
+        <input-field type="int">
+            <name>leadCollectCouponValidDays</name>
+            <label>Coupon Valid Days</label>
+            <label lang="de-DE">Gutschein Gültigkeit (Tage)</label>
+            <helpText>Number of days the coupon is valid after creation</helpText>
+            <helpText lang="de-DE">Anzahl Tage, die der Gutschein nach Erstellung gültig ist</helpText>
+            <defaultValue>30</defaultValue>
+        </input-field>
+
+        <input-field type="float">
+            <name>leadCollectCouponMinOrder</name>
+            <label>Minimum Order Value</label>
+            <label lang="de-DE">Mindestbestellwert</label>
+            <helpText>Minimum order value for coupon to be valid (0 = no minimum)</helpText>
+            <helpText lang="de-DE">Mindestbestellwert für Gutschein-Gültigkeit (0 = kein Minimum)</helpText>
+            <defaultValue>0</defaultValue>
+        </input-field>
+
+        <input-field type="text">
+            <name>leadCollectBasePromotionId</name>
+            <label>Base Promotion ID (auto-generated)</label>
+            <label lang="de-DE">Basis-Promotion ID (automatisch generiert)</label>
+            <helpText>This is automatically created when the first coupon is generated</helpText>
+            <helpText lang="de-DE">Wird automatisch erstellt, wenn der erste Gutschein generiert wird</helpText>
+            <disabled>true</disabled>
+        </input-field>
+    </card>
+
+</config>

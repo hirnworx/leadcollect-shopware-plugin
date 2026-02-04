@@ -1,0 +1,66 @@
+{
+    "name": "leadcollect/shopware-abandoned-cart-plugin",
+    "description": "Shopware 6 Plugin für Warenkorbabbrecher - Sendet automatisch Postkarten zur Kundenrückgewinnung via LeadCollect",
+    "version": "1.0.0",
+    "type": "shopware-platform-plugin",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "LeadCollect / Lightvertise GmbH",
+            "email": "support@leadcollect.de",
+            "homepage": "https://leadcollect.de"
+        },
+        {
+            "name": "MailCampaigns",
+            "homepage": "https://mailcampaigns.nl"
+        }
+    ],
+    "homepage": "https://github.com/hirnworx/leadcollect-shopware-plugin",
+    "support": {
+        "email": "support@leadcollect.de",
+        "issues": "https://github.com/hirnworx/leadcollect-shopware-plugin/issues"
+    },
+    "require": {
+        "php": "~8.1.0 || ~8.2.0 || ~8.3.0",
+        "ext-json": "*",
+        "shopware/core": "6.5.* || 6.6.* || 6.7.*",
+        "guzzlehttp/guzzle": "^7.0"
+    },
+    "extra": {
+        "shopware-plugin-class": "MailCampaigns\\AbandonedCart\\MailCampaignsAbandonedCart",
+        "plugin-icon": "src/Resources/config/plugin.png",
+        "label": {
+            "en-GB": "LeadCollect - Abandoned Cart Recovery",
+            "de-DE": "LeadCollect - Warenkorbabbrecher Postkarten"
+        },
+        "description": {
+            "en-GB": "Automatically send personalized postcards to customers who abandoned their shopping cart. Recover lost sales with physical mail marketing via LeadCollect.",
+            "de-DE": "Sende automatisch personalisierte Postkarten an Kunden, die ihren Warenkorb abgebrochen haben. Gewinne verlorene Verkäufe durch physisches Direktmarketing via LeadCollect zurück."
+        },
+        "manufacturerLink": {
+            "en-GB": "https://leadcollect.de",
+            "de-DE": "https://leadcollect.de"
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "MailCampaigns\\AbandonedCart\\": "src/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "symfony/runtime": true
+        }
+    },
+    "keywords": [
+        "shopware",
+        "shopware6",
+        "abandoned-cart",
+        "cart-recovery",
+        "postcard",
+        "direct-mail",
+        "marketing",
+        "leadcollect",
+        "ecommerce"
+    ]
+}
