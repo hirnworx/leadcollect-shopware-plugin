@@ -74,15 +74,16 @@ class CouponService
             // Create individual code
             $codeId = Uuid::randomHex();
             
+            // Create code WITHOUT customer binding - codes are universal, one-time use
             $this->promotionIndividualCodeRepository->create([
                 [
                     'id' => $codeId,
                     'promotionId' => $basePromotionId,
                     'code' => $code,
                     'payload' => [
-                        'customerId' => $customerId,
                         'abandonedCartId' => $abandonedCartId,
                         'createdBy' => 'LeadCollect',
+                        'createdAt' => (new \DateTime())->format('Y-m-d H:i:s'),
                     ],
                 ],
             ], $context);
@@ -92,7 +93,7 @@ class CouponService
 
             $this->logger->info('LeadCollect Coupon: Created individual code', [
                 'code' => $code,
-                'customerId' => $customerId,
+                'abandonedCartId' => $abandonedCartId,
                 'validUntil' => $validUntil->format('Y-m-d'),
             ]);
 
