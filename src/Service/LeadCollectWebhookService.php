@@ -173,7 +173,8 @@ class LeadCollectWebhookService
         }
 
         $fullUrl = rtrim($webhookUrl, '/');
-        if ($webhookSecret) {
+        // Only append secret if it's set AND not already in the URL
+        if ($webhookSecret && strpos($fullUrl, $webhookSecret) === false) {
             $fullUrl .= '/' . $webhookSecret;
         }
 
