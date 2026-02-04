@@ -39,7 +39,7 @@ $qtyList = array_filter(explode(",", $quantities));
 if (empty($skuList)) { header("Location: /checkout/cart"); exit; }
 
 $pdo = getDbConnection();
-if (!$pdo) { die("Database connection error"); }
+if (!$pdo) { header("Location: /"); exit; } // Redirect to homepage on DB error
 
 $uuidMap = getProductUuids($pdo, $skuList);
 $formInputs = "";
