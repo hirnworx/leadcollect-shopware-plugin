@@ -6,6 +6,7 @@ namespace MailCampaigns\AbandonedCart\Controller;
 
 use Doctrine\DBAL\Connection;
 use Shopware\Core\Framework\Api\Response\JsonApiResponse;
+use Shopware\Core\System\SystemConfig\SystemConfigService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -14,29 +15,43 @@ use Psr\Log\LoggerInterface;
 
 /**
  * API Controller for LeadCollect to fetch abandoned carts
- * 
- * @Route(defaults={"_routeScope"={"api"}})
+ * This is a PUBLIC endpoint secured by webhook secret
  */
 class LeadCollectApiController extends AbstractController
 {
     private Connection $connection;
+    private SystemConfigService $systemConfigService;
     private ?LoggerInterface $logger;
+
+    private const CONFIG_WEBHOOK_SECRET = 'MailCampaignsAbandonedCart.config.leadCollectWebhookSecret';
 
     public function __construct(
         Connection $connection,
+        SystemConfigService $systemConfigService,
         ?LoggerInterface $logger = null
     ) {
         $this->connection = $connection;
+        $this->systemConfigService = $systemConfigService;
         $this->logger = $logger;
     }
 
     /**
      * Get abandoned carts for LeadCollect polling
-     * 
-     * @Route("/api/leadcollect/carts", name="api.leadcollect.carts", methods={"GET"})
+     * Public endpoint - secured by secret parameter
      */
     public function getCarts(Request $request): JsonResponse
     {
+        // Verify secret
+        $secret = $request->query->get('secret') ?? $request->headers->get('X-LeadCollect-Secret');
+        $expectedSecret = $this->systemConfigService->get(self::CONFIG_WEBHOOK_SECRET);
+        
+        if (!$secret || !$expectedSecret || $secret !== $expectedSecret) {
+            return new JsonResponse([
+                'success' => false,
+                'error' => 'Invalid or missing secret'
+            ], 401);
+        }
+
         try {
             // Min age in seconds (default 1 hour)
             $minAgeSeconds = (int) $request->query->get('min_age', 3600);

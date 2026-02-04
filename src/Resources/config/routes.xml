@@ -24,22 +24,22 @@
         </default>
     </route>
 
-    <!-- LeadCollect API: Get abandoned carts (for polling) -->
-    <route id="api.leadcollect.carts" path="/api/leadcollect/carts" methods="GET">
+    <!-- LeadCollect API: Get abandoned carts (for polling) - PUBLIC but secured by secret -->
+    <route id="frontend.leadcollect.api.carts" path="/leadcollect-api/carts" methods="GET">
         <default key="_controller">MailCampaigns\AbandonedCart\Controller\LeadCollectApiController::getCarts</default>
         <default key="_routeScope">
             <list>
-                <string>api</string>
+                <string>storefront</string>
             </list>
         </default>
     </route>
 
-    <!-- LeadCollect API: Health check -->
-    <route id="api.leadcollect.health" path="/api/leadcollect/health" methods="GET">
+    <!-- LeadCollect API: Health check - PUBLIC -->
+    <route id="frontend.leadcollect.api.health" path="/leadcollect-api/health" methods="GET">
         <default key="_controller">MailCampaigns\AbandonedCart\Controller\LeadCollectApiController::health</default>
         <default key="_routeScope">
             <list>
-                <string>api</string>
+                <string>storefront</string>
             </list>
         </default>
     </route>
