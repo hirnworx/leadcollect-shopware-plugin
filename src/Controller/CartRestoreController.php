@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MailCampaigns\AbandonedCart\Controller;
 
 use Doctrine\DBAL\Connection;
+use Shopware\Core\Checkout\Cart\LineItem\LineItem;
 use Shopware\Core\Checkout\Cart\SalesChannel\CartService;
 use Shopware\Core\Checkout\Promotion\Cart\PromotionItemBuilder;
 use Shopware\Core\System\SalesChannel\SalesChannelContext;
@@ -75,6 +76,134 @@ class CartRestoreController extends StorefrontController
 
             // Still redirect to cart, even if restore failed
             return new RedirectResponse($this->generateUrl('frontend.checkout.cart.page'));
+        }
+    }
+
+    /**
+     * Restore cart from SKU-based URL (used by QR codes on postcards)
+     * URL: /leadcollect/restore?sku=SKU1,SKU2&q=QTY1,QTY2&c=COUPONCODE
+     */
+    public function restoreBySku(Request $request, SalesChannelContext $context): Response
+    {
+        $skus = $request->query->get('sku', '');
+        $quantities = $request->query->get('q', '');
+        $couponCode = $request->query->get('c');
+
+        $this->log('info', 'LeadCollect SKU-based cart restore requested', [
+            'skus' => $skus,
+            'quantities' => $quantities,
+            'couponCode' => $couponCode
+        ]);
+
+        try {
+            // Parse SKUs and quantities
+            $skuArray = array_filter(explode(',', $skus));
+            $qtyArray = array_filter(explode(',', $quantities));
+
+            if (!empty($skuArray)) {
+                $this->restoreCartFromSkus($skuArray, $qtyArray, $context);
+            }
+
+            // Apply coupon code if provided
+            if ($couponCode) {
+                $this->applyCouponCode($couponCode, $context);
+                $this->log('info', 'Coupon code applied', ['couponCode' => $couponCode]);
+            }
+
+            // Redirect to checkout/cart page
+            return new RedirectResponse($this->generateUrl('frontend.checkout.cart.page'));
+
+        } catch (\Exception $e) {
+            $this->log('error', 'SKU-based cart restore failed', [
+                'error' => $e->getMessage(),
+                'skus' => $skus
+            ]);
+
+            // Still redirect to cart, even if restore failed
+            return new RedirectResponse($this->generateUrl('frontend.checkout.cart.page'));
+        }
+    }
+
+    /**
+     * Restore cart by adding products based on SKU (product number)
+     */
+    private function restoreCartFromSkus(array $skus, array $quantities, SalesChannelContext $context): void
+    {
+        $cart = $this->cartService->getCart($context->getToken(), $context);
+
+        foreach ($skus as $index => $sku) {
+            $sku = trim($sku);
+            if (empty($sku)) {
+                continue;
+            }
+
+            $quantity = isset($quantities[$index]) ? (int)$quantities[$index] : 1;
+            if ($quantity < 1) {
+                $quantity = 1;
+            }
+
+            try {
+                // Look up product by product number (SKU)
+                $productId = $this->getProductIdBySku($sku, $context->getSalesChannel()->getId());
+                
+                if ($productId) {
+                    $lineItem = new LineItem(
+                        $productId,
+                        LineItem::PRODUCT_LINE_ITEM_TYPE,
+                        $productId,
+                        $quantity
+                    );
+                    $lineItem->setStackable(true);
+                    $lineItem->setRemovable(true);
+
+                    $this->cartService->add($cart, $lineItem, $context);
+                    
+                    $this->log('info', 'Product added to cart', [
+                        'sku' => $sku,
+                        'productId' => $productId,
+                        'quantity' => $quantity
+                    ]);
+                } else {
+                    $this->log('warning', 'Product not found by SKU', ['sku' => $sku]);
+                }
+            } catch (\Exception $e) {
+                $this->log('warning', 'Could not add product to cart', [
+                    'sku' => $sku,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Get product ID by SKU (product number)
+     */
+    private function getProductIdBySku(string $sku, string $salesChannelId): ?string
+    {
+        try {
+            // Query product by product_number
+            $sql = "
+                SELECT LOWER(HEX(p.id)) as id
+                FROM product p
+                INNER JOIN product_visibility pv ON p.id = pv.product_id
+                WHERE p.product_number = :sku
+                  AND pv.sales_channel_id = UNHEX(REPLACE(:salesChannelId, '-', ''))
+                  AND p.active = 1
+                LIMIT 1
+            ";
+            
+            $result = $this->connection->fetchAssociative($sql, [
+                'sku' => $sku,
+                'salesChannelId' => $salesChannelId
+            ]);
+            
+            return $result['id'] ?? null;
+        } catch (\Exception $e) {
+            $this->log('error', 'Error looking up product by SKU', [
+                'sku' => $sku,
+                'error' => $e->getMessage()
+            ]);
+            return null;
         }
     }
 

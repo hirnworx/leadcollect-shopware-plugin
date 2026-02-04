@@ -4,8 +4,19 @@
         xsi:schemaLocation="http://symfony.com/schema/routing
         https://symfony.com/schema/routing/routing-1.0.xsd">
 
+    <!-- Token-based restore (original) -->
     <route id="frontend.leadcollect.cart.restore" path="/leadcollect-restore" methods="GET">
         <default key="_controller">MailCampaigns\AbandonedCart\Controller\CartRestoreController::restore</default>
+        <default key="_routeScope">
+            <list>
+                <string>storefront</string>
+            </list>
+        </default>
+    </route>
+
+    <!-- SKU-based restore (for QR codes on postcards) -->
+    <route id="frontend.leadcollect.cart.restore.sku" path="/leadcollect/restore" methods="GET">
+        <default key="_controller">MailCampaigns\AbandonedCart\Controller\CartRestoreController::restoreBySku</default>
         <default key="_routeScope">
             <list>
                 <string>storefront</string>

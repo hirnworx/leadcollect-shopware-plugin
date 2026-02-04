@@ -1,7 +1,7 @@
 {
     "name": "leadcollect/shopware-abandoned-cart-plugin",
     "description": "Shopware 6 Plugin für Warenkorbabbrecher - Sendet automatisch Postkarten zur Kundenrückgewinnung via LeadCollect",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "type": "shopware-platform-plugin",
     "license": "MIT",
     "authors": [
