@@ -138,7 +138,7 @@ class LeadCollectWebhookSubscriber implements EventSubscriberInterface
         } catch (\Throwable $e) {}
 
         try {
-            $this->webhookService->sendCartAbandonedWebhook($abandonedCart, $cartData, $couponData);
+            $this->webhookService->sendCartAbandonedWebhook($abandonedCart, $cartData, $salesChannelId, $couponData);
         } catch (\Throwable $e) {}
     }
 
