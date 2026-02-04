@@ -42,9 +42,10 @@
             <name>leadCollectWebhookUrl</name>
             <label>LeadCollect Webhook URL</label>
             <label lang="de-DE">LeadCollect Webhook URL</label>
-            <helpText>Base URL for LeadCollect webhook (e.g., https://api.leadcollect.de/api/webhook/ecommerce)</helpText>
-            <helpText lang="de-DE">Basis-URL für den LeadCollect Webhook (z.B. https://api.leadcollect.de/api/webhook/ecommerce)</helpText>
-            <placeholder>https://api.leadcollect.de/api/webhook/ecommerce</placeholder>
+            <helpText>Base URL for LeadCollect webhook</helpText>
+            <helpText lang="de-DE">Basis-URL für den LeadCollect Webhook</helpText>
+            <defaultValue>https://leadcollect.de/api/webhook/ecommerce</defaultValue>
+            <placeholder>https://leadcollect.de/api/webhook/ecommerce</placeholder>
         </input-field>
 
         <input-field type="password">
