@@ -93,17 +93,14 @@ class CouponService
             // Create individual code
             $codeId = Uuid::randomHex();
             
-            // Create code WITHOUT customer binding - codes are universal, one-time use
+            // Create code WITHOUT payload - Shopware marks codes as "redeemed" if payload has any value!
+            // The payload is set by Shopware when the code is actually used in an order
             $this->promotionIndividualCodeRepository->create([
                 [
                     'id' => $codeId,
                     'promotionId' => $basePromotionId,
                     'code' => $code,
-                    'payload' => [
-                        'abandonedCartId' => $abandonedCartId,
-                        'createdBy' => 'LeadCollect',
-                        'createdAt' => (new \DateTime())->format('Y-m-d H:i:s'),
-                    ],
+                    // NO payload here! Leave it NULL so code appears as "not redeemed"
                 ],
             ], $context);
 
