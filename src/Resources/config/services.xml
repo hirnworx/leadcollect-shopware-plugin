@@ -95,6 +95,8 @@
         <service id="MailCampaigns\AbandonedCart\Service\LeadCollectWebhookService">
             <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
             <argument type="service" id="monolog.logger.business_events"/>
+            <argument type="service" id="customer.repository"/>
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
         </service>
 
         <!-- LeadCollect Coupon Service -->
@@ -110,6 +112,7 @@
             <argument type="service" id="MailCampaigns\AbandonedCart\Service\LeadCollectWebhookService"/>
             <argument type="service" id="monolog.logger.business_events"/>
             <argument type="service" id="promotion.repository"/>
+            <argument type="service" id="MailCampaigns\AbandonedCart\Service\CouponService"/>
             <tag name="kernel.event_subscriber"/>
         </service>
     </services>

@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace MailCampaigns\AbandonedCart\Service;
 
+use Doctrine\DBAL\Connection;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
 use Psr\Log\LoggerInterface;
-use Shopware\Core\Checkout\Customer\CustomerEntity;
+use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
 use Shopware\Core\System\SystemConfig\SystemConfigService;
-use MailCampaigns\AbandonedCart\Entity\AbandonedCartEntity;
+use MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartEntity;
 
 /**
  * Service to send webhooks to LeadCollect when cart events occur
@@ -19,6 +20,8 @@ class LeadCollectWebhookService
     private Client $httpClient;
     private SystemConfigService $systemConfigService;
     private LoggerInterface $logger;
+    private EntityRepository $customerRepository;
+    private Connection $connection;
 
     private const CONFIG_WEBHOOK_URL = 'MailCampaignsAbandonedCart.config.leadCollectWebhookUrl';
     private const CONFIG_WEBHOOK_SECRET = 'MailCampaignsAbandonedCart.config.leadCollectWebhookSecret';
@@ -29,10 +32,14 @@ class LeadCollectWebhookService
 
     public function __construct(
         SystemConfigService $systemConfigService,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        EntityRepository $customerRepository,
+        Connection $connection
     ) {
         $this->systemConfigService = $systemConfigService;
         $this->logger = $logger;
+        $this->customerRepository = $customerRepository;
+        $this->connection = $connection;
         $this->httpClient = new Client([
             'timeout' => 10,
             'connect_timeout' => 5,
@@ -72,54 +79,48 @@ class LeadCollectWebhookService
     public function sendCartAbandonedWebhook(
         AbandonedCartEntity $abandonedCart,
         array $cartData,
-        ?string $salesChannelId = null
+        ?string $salesChannelId = null,
+        ?array $couponData = null
     ): bool {
         if (!$this->isEnabled($salesChannelId)) {
             return false;
         }
 
-        $customer = $abandonedCart->getCustomer();
-        if (!$customer) {
-            $this->logger->warning('LeadCollect Webhook: No customer found for abandoned cart', [
-                'cartId' => $abandonedCart->getId(),
-            ]);
-            return false;
-        }
+        $customerId = $abandonedCart->getCustomerId();
 
-        // Get customer address
-        $address = $this->getCustomerAddress($customer);
-        if (!$address) {
-            $this->logger->warning('LeadCollect Webhook: No address found for customer', [
-                'customerId' => $customer->getId(),
-            ]);
-            return false;
-        }
-
-        // Build payload
+        // Build payload with available data
         $payload = [
             'eventType' => 'cart_abandoned',
-            'externalCartId' => $abandonedCart->getId(),
-            'externalCustomerId' => $customer->getId(),
-            'abandonedAt' => $abandonedCart->getCreatedAt()?->format(\DateTimeInterface::ATOM),
+            'externalCartId' => $abandonedCart->getCartToken(),
+            'externalCustomerId' => $customerId,
+            'abandonedAt' => date('c'),
             'customer' => [
-                'salutation' => $customer->getSalutation()?->getDisplayName(),
-                'firstName' => $customer->getFirstName(),
-                'lastName' => $customer->getLastName(),
-                'email' => $customer->getEmail(),
-                'phone' => $address['phone'] ?? null,
+                'firstName' => $cartData['customer_first_name'] ?? 'Kunde',
+                'lastName' => $cartData['customer_last_name'] ?? '',
+                'email' => $cartData['customer_email'] ?? null,
                 'address' => [
-                    'street' => $address['street'],
-                    'zipcode' => $address['zipcode'],
-                    'city' => $address['city'],
-                    'country' => $address['country'],
+                    'street' => $cartData['billing_street'] ?? '',
+                    'zipcode' => $cartData['billing_zipcode'] ?? '',
+                    'city' => $cartData['billing_city'] ?? '',
+                    'country' => $cartData['billing_country'] ?? 'DE',
                 ],
             ],
             'cart' => [
                 'totalPrice' => $abandonedCart->getPrice(),
-                'currency' => $cartData['price']['currencyId'] ?? 'EUR',
-                'lineItems' => $this->formatLineItems($cartData['lineItems'] ?? []),
+                'currency' => 'EUR',
+                'lineItems' => $this->formatLineItems($abandonedCart->getLineItems()),
             ],
         ];
+        
+        // Add coupon data if available
+        if ($couponData) {
+            $payload['coupon'] = [
+                'code' => $couponData['code'] ?? null,
+                'type' => $couponData['type'] ?? 'percentage',
+                'value' => $couponData['value'] ?? 10,
+                'validUntil' => $couponData['validUntil'] ?? null,
+            ];
+        }
 
         return $this->sendWebhook($payload, $salesChannelId);
     }
@@ -229,40 +230,12 @@ class LeadCollectWebhookService
                 ]);
 
                 if ($attempt < self::MAX_RETRIES) {
-                    usleep(self::RETRY_DELAY_MS * 1000 * $attempt); // Exponential backoff
+                    usleep(self::RETRY_DELAY_MS * 1000 * $attempt);
                 }
             }
         }
 
         return false;
-    }
-
-    /**
-     * Extract customer address from CustomerEntity
-     */
-    private function getCustomerAddress(CustomerEntity $customer): ?array
-    {
-        $defaultBillingAddress = $customer->getDefaultBillingAddress();
-        
-        if (!$defaultBillingAddress) {
-            // Try to get any address
-            $addresses = $customer->getAddresses();
-            if ($addresses && $addresses->count() > 0) {
-                $defaultBillingAddress = $addresses->first();
-            }
-        }
-
-        if (!$defaultBillingAddress) {
-            return null;
-        }
-
-        return [
-            'street' => $defaultBillingAddress->getStreet(),
-            'zipcode' => $defaultBillingAddress->getZipcode(),
-            'city' => $defaultBillingAddress->getCity(),
-            'country' => $defaultBillingAddress->getCountry()?->getIso() ?? 'DE',
-            'phone' => $defaultBillingAddress->getPhoneNumber(),
-        ];
     }
 
     /**
@@ -273,39 +246,70 @@ class LeadCollectWebhookService
         $formatted = [];
 
         foreach ($lineItems as $item) {
-            // Skip non-product items
-            if (($item['type'] ?? '') !== 'product') {
+            // Handle LineItem object
+            if (is_object($item) && $item instanceof \Shopware\Core\Checkout\Cart\LineItem\LineItem) {
+                // Skip non-product items
+                if ($item->getType() !== 'product') {
+                    continue;
+                }
+                
+                $priceObj = $item->getPrice();
+                $unitPrice = $priceObj ? $priceObj->getUnitPrice() : 0;
+                $cover = $item->getCover();
+                $imageUrl = null;
+                
+                if ($cover && method_exists($cover, 'getUrl')) {
+                    $imageUrl = $cover->getUrl();
+                }
+                
+                $formatted[] = [
+                    'name' => $item->getLabel() ?: 'Produkt',
+                    'sku' => $item->getPayloadValue('productNumber') ?? $item->getReferencedId(),
+                    'price' => $unitPrice,
+                    'quantity' => $item->getQuantity(),
+                    'imageUrl' => $imageUrl,
+                ];
                 continue;
             }
+            
+            // Handle serialized array format (from jsonSerialize)
+            if (is_array($item)) {
+                // Skip non-product items
+                if (($item['type'] ?? '') !== 'product') {
+                    continue;
+                }
+                
+                // Extract price - can be array with unitPrice or numeric
+                $price = 0;
+                if (isset($item['price'])) {
+                    if (is_array($item['price']) && isset($item['price']['unitPrice'])) {
+                        $price = (float) $item['price']['unitPrice'];
+                    } elseif (is_numeric($item['price'])) {
+                        $price = (float) $item['price'];
+                    }
+                }
+                
+                // Extract image URL
+                $imageUrl = null;
+                if (isset($item['cover'])) {
+                    $cover = $item['cover'];
+                    if (is_array($cover) && isset($cover['url'])) {
+                        $imageUrl = $cover['url'];
+                    } elseif (is_array($cover) && isset($cover['media']['url'])) {
+                        $imageUrl = $cover['media']['url'];
+                    }
+                }
 
-            $formatted[] = [
-                'name' => $item['label'] ?? $item['productId'] ?? 'Produkt',
-                'sku' => $item['payload']['productNumber'] ?? $item['productId'] ?? null,
-                'price' => $item['price']['unitPrice'] ?? $item['unitPrice'] ?? 0,
-                'quantity' => $item['quantity'] ?? 1,
-                'imageUrl' => $this->extractImageUrl($item),
-            ];
+                $formatted[] = [
+                    'name' => $item['label'] ?? $item['productId'] ?? 'Produkt',
+                    'sku' => $item['payload']['productNumber'] ?? $item['referencedId'] ?? null,
+                    'price' => $price,
+                    'quantity' => (int) ($item['quantity'] ?? 1),
+                    'imageUrl' => $imageUrl,
+                ];
+            }
         }
 
         return $formatted;
-    }
-
-    /**
-     * Extract product image URL from line item
-     */
-    private function extractImageUrl(array $item): ?string
-    {
-        // Try different possible locations for cover image
-        $cover = $item['cover'] ?? $item['payload']['cover'] ?? null;
-        
-        if ($cover && isset($cover['url'])) {
-            return $cover['url'];
-        }
-
-        if ($cover && isset($cover['media']['url'])) {
-            return $cover['media']['url'];
-        }
-
-        return null;
     }
 }

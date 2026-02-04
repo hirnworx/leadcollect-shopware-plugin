@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace MailCampaigns\AbandonedCart\Subscriber;
 
-use MailCampaigns\AbandonedCart\Event\AfterCartMarkedAsAbandonedEvent;
-use MailCampaigns\AbandonedCart\Event\AfterAbandonedCartUpdatedEvent;
+use MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\Event\AfterCartMarkedAsAbandonedEvent;
+use MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\Event\AfterAbandonedCartUpdatedEvent;
 use MailCampaigns\AbandonedCart\Service\LeadCollectWebhookService;
+use MailCampaigns\AbandonedCart\Service\CouponService;
 use Psr\Log\LoggerInterface;
 use Shopware\Core\Checkout\Cart\Event\CheckoutOrderPlacedEvent;
 use Shopware\Core\Checkout\Order\OrderEntity;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\EqualsFilter;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
@@ -23,15 +23,18 @@ class LeadCollectWebhookSubscriber implements EventSubscriberInterface
     private LeadCollectWebhookService $webhookService;
     private LoggerInterface $logger;
     private EntityRepository $promotionRepository;
+    private CouponService $couponService;
 
     public function __construct(
         LeadCollectWebhookService $webhookService,
         LoggerInterface $logger,
-        EntityRepository $promotionRepository
+        EntityRepository $promotionRepository,
+        CouponService $couponService
     ) {
         $this->webhookService = $webhookService;
         $this->logger = $logger;
         $this->promotionRepository = $promotionRepository;
+        $this->couponService = $couponService;
     }
 
     public static function getSubscribedEvents(): array
@@ -50,28 +53,53 @@ class LeadCollectWebhookSubscriber implements EventSubscriberInterface
     {
         $abandonedCart = $event->getAbandonedCart();
         $cartData = $event->getCartData();
-        $salesChannelId = $abandonedCart->getSalesChannelId();
+        $salesChannelId = null; // SalesChannelId not directly available on this entity
+        
+        $customerId = $abandonedCart->getCustomerId();
+        $cartToken = $abandonedCart->getCartToken();
 
         $this->logger->info('LeadCollect: Cart abandoned event received', [
-            'cartId' => $abandonedCart->getId(),
-            'customerId' => $abandonedCart->getCustomerId(),
+            'cartId' => $cartToken,
+            'customerId' => $customerId,
         ]);
+
+        // Generate coupon code for recovery
+        $couponData = null;
+        try {
+            $couponData = $this->couponService->createCouponCode(
+                $customerId,
+                $cartToken,
+                $salesChannelId
+            );
+            
+            if ($couponData) {
+                $this->logger->info('LeadCollect: Coupon created', [
+                    'code' => $couponData['code'],
+                    'value' => $couponData['value'] ?? null,
+                ]);
+            }
+        } catch (\Exception $e) {
+            $this->logger->warning('LeadCollect: Could not create coupon', [
+                'error' => $e->getMessage(),
+            ]);
+        }
 
         try {
             $success = $this->webhookService->sendCartAbandonedWebhook(
                 $abandonedCart,
                 $cartData,
-                $salesChannelId
+                $salesChannelId,
+                $couponData
             );
 
             if ($success) {
                 $this->logger->info('LeadCollect: Cart abandoned webhook sent successfully', [
-                    'cartId' => $abandonedCart->getId(),
+                    'cartId' => $cartToken,
                 ]);
             }
         } catch (\Exception $e) {
             $this->logger->error('LeadCollect: Failed to send cart abandoned webhook', [
-                'cartId' => $abandonedCart->getId(),
+                'cartId' => $cartToken,
                 'error' => $e->getMessage(),
             ]);
         }
@@ -84,9 +112,6 @@ class LeadCollectWebhookSubscriber implements EventSubscriberInterface
     {
         // Optional: Send update webhook if cart value changed significantly
         // For now, we skip updates to avoid webhook spam
-        $this->logger->debug('LeadCollect: Cart updated event received (ignored)', [
-            'cartId' => $event->getAbandonedCart()->getId(),
-        ]);
     }
 
     /**

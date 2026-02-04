@@ -241,7 +241,7 @@ class CouponService
                     'individualCodePattern' => 'COMEBACK-%s',
                     'maxRedemptionsGlobal' => null,
                     'maxRedemptionsPerCustomer' => 1,
-                    'orderCount' => $minOrder > 0 ? null : 0,
+                    'orderCount' => 0,
                     'discounts' => [
                         [
                             'id' => $discountId,
