@@ -4,37 +4,43 @@ declare(strict_types=1);
 
 namespace MailCampaigns\AbandonedCart\Subscriber;
 
+use Doctrine\DBAL\Connection;
 use MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\Event\AfterCartMarkedAsAbandonedEvent;
 use MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\Event\AfterAbandonedCartUpdatedEvent;
 use MailCampaigns\AbandonedCart\Service\LeadCollectWebhookService;
 use MailCampaigns\AbandonedCart\Service\CouponService;
-use Psr\Log\LoggerInterface;
 use Shopware\Core\Checkout\Cart\Event\CheckoutOrderPlacedEvent;
-use Shopware\Core\Checkout\Order\OrderEntity;
+use Shopware\Core\Checkout\Cart\LineItem\LineItem;
+use Shopware\Core\Checkout\Cart\SalesChannel\CartService;
 use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
-use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
+use Shopware\Core\Framework\Uuid\Uuid;
+use Shopware\Storefront\Event\StorefrontRenderEvent;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+use Symfony\Component\HttpFoundation\RequestStack;
 
-/**
- * Subscribes to abandoned cart and order events to send webhooks to LeadCollect
- */
 class LeadCollectWebhookSubscriber implements EventSubscriberInterface
 {
     private LeadCollectWebhookService $webhookService;
-    private LoggerInterface $logger;
-    private EntityRepository $promotionRepository;
     private CouponService $couponService;
+    private EntityRepository $customerRepository;
+    private Connection $connection;
+    private CartService $cartService;
+    private RequestStack $requestStack;
 
     public function __construct(
         LeadCollectWebhookService $webhookService,
-        LoggerInterface $logger,
-        EntityRepository $promotionRepository,
-        CouponService $couponService
+        CouponService $couponService,
+        EntityRepository $customerRepository,
+        Connection $connection,
+        CartService $cartService,
+        RequestStack $requestStack
     ) {
         $this->webhookService = $webhookService;
-        $this->logger = $logger;
-        $this->promotionRepository = $promotionRepository;
         $this->couponService = $couponService;
+        $this->customerRepository = $customerRepository;
+        $this->connection = $connection;
+        $this->cartService = $cartService;
+        $this->requestStack = $requestStack;
     }
 
     public static function getSubscribedEvents(): array
@@ -42,181 +48,99 @@ class LeadCollectWebhookSubscriber implements EventSubscriberInterface
         return [
             AfterCartMarkedAsAbandonedEvent::class => 'onCartAbandoned',
             AfterAbandonedCartUpdatedEvent::class => 'onAbandonedCartUpdated',
-            CheckoutOrderPlacedEvent::class => 'onOrderPlaced',
+            CheckoutOrderPlacedEvent::class => ['onOrderPlaced', 5],
+            StorefrontRenderEvent::class => ['onStorefrontRender', 100],
         ];
     }
 
-    /**
-     * Called when a cart is first marked as abandoned
-     */
+    public function onStorefrontRender(StorefrontRenderEvent $event): void
+    {
+        $request = $event->getRequest();
+        $restoreCode = $request->query->get('lc_restore');
+        
+        if (!$restoreCode) {
+            return;
+        }
+
+        $route = $request->attributes->get('_route', '');
+        if ($route !== 'frontend.checkout.cart.page') {
+            return;
+        }
+
+        $session = $request->getSession();
+        if ($session->get('lc_restored_' . $restoreCode)) {
+            return;
+        }
+
+        try {
+            $abandonedCarts = $this->connection->fetchAllAssociative(
+                'SELECT * FROM mailcampaigns_abandoned_cart WHERE line_items IS NOT NULL ORDER BY created_at DESC LIMIT 10'
+            );
+
+            $abandonedCart = null;
+            foreach ($abandonedCarts as $cart) {
+                $items = json_decode($cart['line_items'] ?? '', true);
+                if (!empty($items)) {
+                    $abandonedCart = $cart;
+                    break;
+                }
+            }
+
+            if (!$abandonedCart) {
+                return;
+            }
+
+            $lineItems = json_decode($abandonedCart['line_items'], true);
+            $context = $event->getSalesChannelContext();
+            $cart = $this->cartService->getCart($context->getToken(), $context);
+
+            foreach ($lineItems as $item) {
+                if (!isset($item['type']) || $item['type'] !== 'product') {
+                    continue;
+                }
+
+                $productId = $item['referencedId'] ?? $item['id'] ?? $item['productId'] ?? null;
+                $quantity = (int)($item['quantity'] ?? 1);
+
+                if (!$productId) {
+                    continue;
+                }
+
+                try {
+                    $lineItem = new LineItem(Uuid::randomHex(), LineItem::PRODUCT_LINE_ITEM_TYPE, $productId, $quantity);
+                    $lineItem->setStackable(true);
+                    $lineItem->setRemovable(true);
+                    $cart = $this->cartService->add($cart, $lineItem, $context);
+                } catch (\Throwable $e) {
+                    continue;
+                }
+            }
+
+            $session->set('lc_restored_' . $restoreCode, true);
+        } catch (\Throwable $e) {}
+    }
+
     public function onCartAbandoned(AfterCartMarkedAsAbandonedEvent $event): void
     {
         $abandonedCart = $event->getAbandonedCart();
         $cartData = $event->getCartData();
-        $salesChannelId = null; // SalesChannelId not directly available on this entity
-        
-        $customerId = $abandonedCart->getCustomerId();
-        $cartToken = $abandonedCart->getCartToken();
-
-        $this->logger->info('LeadCollect: Cart abandoned event received', [
-            'cartId' => $cartToken,
-            'customerId' => $customerId,
-        ]);
-
-        // Generate coupon code for recovery
         $couponData = null;
+        
         try {
-            $couponData = $this->couponService->createCouponCode(
-                $customerId,
-                $cartToken,
-                $salesChannelId
-            );
-            
-            if ($couponData) {
-                $this->logger->info('LeadCollect: Coupon created', [
-                    'code' => $couponData['code'],
-                    'value' => $couponData['value'] ?? null,
-                ]);
-            }
-        } catch (\Exception $e) {
-            $this->logger->warning('LeadCollect: Could not create coupon', [
-                'error' => $e->getMessage(),
-            ]);
-        }
+            $couponData = $this->couponService->createCouponCode($abandonedCart->getCustomerId(), $abandonedCart->getCartToken(), null);
+        } catch (\Throwable $e) {}
 
         try {
-            $success = $this->webhookService->sendCartAbandonedWebhook(
-                $abandonedCart,
-                $cartData,
-                $salesChannelId,
-                $couponData
-            );
-
-            if ($success) {
-                $this->logger->info('LeadCollect: Cart abandoned webhook sent successfully', [
-                    'cartId' => $cartToken,
-                ]);
-            }
-        } catch (\Exception $e) {
-            $this->logger->error('LeadCollect: Failed to send cart abandoned webhook', [
-                'cartId' => $cartToken,
-                'error' => $e->getMessage(),
-            ]);
-        }
+            $this->webhookService->sendCartAbandonedWebhook($abandonedCart, $cartData, $couponData);
+        } catch (\Throwable $e) {}
     }
 
-    /**
-     * Called when an abandoned cart is updated (e.g., customer adds more items)
-     */
-    public function onAbandonedCartUpdated(AfterAbandonedCartUpdatedEvent $event): void
-    {
-        // Optional: Send update webhook if cart value changed significantly
-        // For now, we skip updates to avoid webhook spam
-    }
+    public function onAbandonedCartUpdated(AfterAbandonedCartUpdatedEvent $event): void {}
 
-    /**
-     * Called when an order is placed - for recovery tracking
-     */
     public function onOrderPlaced(CheckoutOrderPlacedEvent $event): void
     {
-        $order = $event->getOrder();
-        $salesChannelId = $event->getSalesChannelId();
-
-        // Check if order has a promotion code (potential recovery)
-        $couponCode = $this->extractCouponCode($order);
-        
-        // Get customer email
-        $customer = $order->getOrderCustomer();
-        $customerEmail = $customer?->getEmail();
-        $customerId = $customer?->getCustomerId();
-
-        if (!$customerId) {
-            return; // Guest order without tracking
-        }
-
-        $this->logger->info('LeadCollect: Order placed event received', [
-            'orderId' => $order->getId(),
-            'customerId' => $customerId,
-            'hasCoupon' => !empty($couponCode),
-        ]);
-
         try {
-            // Calculate order value
-            $orderValue = $order->getAmountTotal();
-
-            $success = $this->webhookService->sendOrderPlacedWebhook(
-                $order->getId(),
-                $orderValue,
-                $couponCode,
-                $customerId,
-                $customerEmail,
-                $salesChannelId
-            );
-
-            if ($success) {
-                $this->logger->info('LeadCollect: Order placed webhook sent successfully', [
-                    'orderId' => $order->getId(),
-                ]);
-            }
-        } catch (\Exception $e) {
-            $this->logger->error('LeadCollect: Failed to send order placed webhook', [
-                'orderId' => $order->getId(),
-                'error' => $e->getMessage(),
-            ]);
-        }
-    }
-
-    /**
-     * Extract coupon/promotion code from order
-     */
-    private function extractCouponCode(OrderEntity $order): ?string
-    {
-        $lineItems = $order->getLineItems();
-        
-        if (!$lineItems) {
-            return null;
-        }
-
-        foreach ($lineItems as $lineItem) {
-            if ($lineItem->getType() === 'promotion') {
-                $payload = $lineItem->getPayload();
-                
-                // Try to get the promotion code
-                if (isset($payload['code'])) {
-                    return $payload['code'];
-                }
-                
-                // Fallback: get promotion ID and look up code
-                if (isset($payload['promotionId'])) {
-                    return $this->getPromotionCode($payload['promotionId']);
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Look up promotion code by ID
-     */
-    private function getPromotionCode(string $promotionId): ?string
-    {
-        try {
-            $criteria = new Criteria([$promotionId]);
-            $criteria->addAssociation('discounts');
-            
-            $promotion = $this->promotionRepository->search($criteria, \Shopware\Core\Framework\Context::createDefaultContext())->first();
-            
-            if ($promotion) {
-                return $promotion->getCode();
-            }
-        } catch (\Exception $e) {
-            $this->logger->warning('LeadCollect: Could not look up promotion code', [
-                'promotionId' => $promotionId,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        return null;
+            $this->webhookService->sendOrderPlacedWebhook($event->getOrder());
+        } catch (\Throwable $e) {}
     }
 }

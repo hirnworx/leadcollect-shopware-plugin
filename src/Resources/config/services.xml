@@ -1,17 +1,103 @@
 <?xml version="1.0" ?>
 <container xmlns="http://symfony.com/schema/dic/services"
            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-           xsi:schemaLocation="http://symfony.com/schema/dic/services https://symfony.com/schema/dic/services/services-1.0.xsd">
+           xsi:schemaLocation="http://symfony.com/schema/dic/services http://symfony.com/schema/dic/services/services-1.0.xsd">
+
     <services>
+        <service id="MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartDefinition">
+            <tag name="shopware.entity.definition" entity="abandoned_cart" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Core\Checkout\Cart\Handler\CartRepositoryHandlerFactory">
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
+            <argument type="service" id="MailCampaigns\AbandonedCart\Service\ShopwareVersionHelper"/>
+            <argument type="service" id="logger" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Core\Checkout\Cart\CartRepository">
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
+            <argument type="service" id="MailCampaigns\AbandonedCart\Core\Checkout\Cart\Handler\CartRepositoryHandlerFactory"/>
+            <argument type="service" id="logger" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartManager">
+            <argument type="service" id="MailCampaigns\AbandonedCart\Core\Checkout\Cart\CartRepository" />
+            <argument type="service" id="abandoned_cart.repository" />
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
+            <argument type="service" id="event_dispatcher"/>
+            <argument type="service" id="scheduled_task.repository"/>
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Command\RelaunchAbandonedCartSchedulerCommand">
+            <argument type="service" id="MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartManager" />
+            <tag name="console.command"/>
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Command\MarkAbandonedCartCommand">
+            <argument type="service" id="MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartManager" />
+            <tag name="console.command"/>
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Command\UpdateAbandonedCartCommand">
+            <argument type="service" id="MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartManager"/>
+            <tag name="console.command"/>
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Service\ScheduledTask\RelaunchAbandonedCartSchedulerTask">
+            <tag name="shopware.scheduled.task" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Service\ScheduledTask\RelaunchAbandonedCartSchedulerTaskHandler">
+            <argument type="service" id="scheduled_task.repository" />
+            <argument type="service" id="MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartManager" />
+            <argument type="service" id="logger" on-invalid="null" />
+            <argument type="service" id="MailCampaigns\AbandonedCart\Service\ShopwareVersionHelper" on-invalid="null" />
+            <tag name="messenger.message_handler" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Service\ScheduledTask\UpdateAbandonedCartTask">
+            <tag name="shopware.scheduled.task" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Service\ScheduledTask\UpdateAbandonedCartTaskHandler">
+            <argument type="service" id="scheduled_task.repository" />
+            <argument type="service" id="MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartManager" />
+            <argument type="service" id="logger" on-invalid="null" />
+            <argument type="service" id="MailCampaigns\AbandonedCart\Service\ShopwareVersionHelper" on-invalid="null" />
+            <tag name="messenger.message_handler" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Service\ScheduledTask\MarkAbandonedCartTask">
+            <tag name="shopware.scheduled.task" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Service\ScheduledTask\MarkAbandonedCartTaskHandler">
+            <argument type="service" id="scheduled_task.repository" />
+            <argument type="service" id="MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartManager" />
+            <argument type="service" id="logger" on-invalid="null" />
+            <argument type="service" id="MailCampaigns\AbandonedCart\Service\ShopwareVersionHelper" on-invalid="null" />
+            <tag name="messenger.message_handler" />
+        </service>
+
+        <service id="MailCampaigns\AbandonedCart\Service\ShopwareVersionHelper" />
+
+        <service id="MailCampaigns\AbandonedCart\Subscriber\CartChangeSubscriber">
+            <argument type="service" id="Shopware\Core\Checkout\Cart\CartPersister"/>
+            <tag name="kernel.event_subscriber"/>
+        </service>
+
         <service id="MailCampaigns\AbandonedCart\Service\LeadCollectWebhookService">
             <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
             <argument type="service" id="monolog.logger.business_events" on-invalid="null"/>
+            <argument type="service" id="customer.repository"/>
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
         </service>
 
         <service id="MailCampaigns\AbandonedCart\Service\CouponService">
-            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
             <argument type="service" id="promotion.repository"/>
             <argument type="service" id="promotion_individual_code.repository"/>
+            <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
             <argument type="service" id="monolog.logger.business_events" on-invalid="null"/>
         </service>
 
@@ -20,14 +106,22 @@
             <argument type="service" id="MailCampaigns\AbandonedCart\Service\CouponService"/>
             <argument type="service" id="customer.repository"/>
             <argument type="service" id="Doctrine\DBAL\Connection"/>
-            <tag name="kernel.event_subscriber"/>
-        </service>
-
-        <service id="MailCampaigns\AbandonedCart\Subscriber\CartRestoreSubscriber">
-            <argument type="service" id="Doctrine\DBAL\Connection"/>
             <argument type="service" id="Shopware\Core\Checkout\Cart\SalesChannel\CartService"/>
             <argument type="service" id="request_stack"/>
             <tag name="kernel.event_subscriber"/>
+        </service>
+
+        <!-- Cart Restore Controller for QR Code functionality -->
+        <service id="MailCampaigns\AbandonedCart\Controller\CartRestoreController" public="true">
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
+            <argument type="service" id="Shopware\Core\Checkout\Cart\SalesChannel\CartService"/>
+            <argument type="service" id="monolog.logger.business_events" on-invalid="null"/>
+            <call method="setContainer">
+                <argument type="service" id="service_container"/>
+            </call>
+            <call method="setTwig">
+                <argument type="service" id="twig"/>
+            </call>
         </service>
     </services>
 </container>
