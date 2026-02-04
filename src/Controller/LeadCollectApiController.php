@@ -5,23 +5,24 @@ declare(strict_types=1);
 namespace MailCampaigns\AbandonedCart\Controller;
 
 use Doctrine\DBAL\Connection;
-use Shopware\Core\Framework\Api\Response\JsonApiResponse;
 use Shopware\Core\System\SystemConfig\SystemConfigService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\Routing\Annotation\Route;
 use Psr\Log\LoggerInterface;
 
 /**
  * API Controller for LeadCollect to fetch abandoned carts
  * This is a PUBLIC endpoint secured by webhook secret
+ * 
+ * Compatible with Shopware 6.5 and 6.6+
  */
 class LeadCollectApiController extends AbstractController
 {
     private Connection $connection;
     private SystemConfigService $systemConfigService;
     private ?LoggerInterface $logger;
+    private ?bool $isLegacyCartTable = null;
 
     private const CONFIG_WEBHOOK_SECRET = 'MailCampaignsAbandonedCart.config.leadCollectWebhookSecret';
 
@@ -60,105 +61,36 @@ class LeadCollectApiController extends AbstractController
             
             $this->log('info', 'LeadCollect API: Fetching carts', [
                 'minAgeSeconds' => $minAgeSeconds,
-                'limit' => $limit
+                'limit' => $limit,
+                'isLegacy' => $this->isLegacyCartTable()
             ]);
 
             // Calculate threshold timestamp
             $threshold = new \DateTime();
             $threshold->modify("-{$minAgeSeconds} seconds");
 
-            // Query for abandoned carts:
-            // - Cart is older than threshold
-            // - Customer has address data
-            // - Cart has items
-            // - No order was placed with this cart token
-            $sql = "
-                SELECT 
-                    LOWER(HEX(c.token)) as cart_token,
-                    c.price as cart_total,
-                    c.line_item_count,
-                    c.created_at as cart_created_at,
-                    c.updated_at as cart_updated_at,
-                    c.payload as cart_payload,
-                    LOWER(HEX(cu.id)) as customer_id,
-                    cu.first_name,
-                    cu.last_name,
-                    cu.email,
-                    cu.salutation_id,
-                    ca.street,
-                    ca.zipcode,
-                    ca.city,
-                    LOWER(HEX(ca.country_id)) as country_id,
-                    co.iso as country_iso,
-                    LOWER(HEX(c.sales_channel_id)) as sales_channel_id
-                FROM cart c
-                INNER JOIN customer cu ON c.customer_id = cu.id
-                INNER JOIN customer_address ca ON cu.default_billing_address_id = ca.id
-                INNER JOIN country co ON ca.country_id = co.id
-                LEFT JOIN `order` o ON c.token = o.cart_token
-                WHERE c.created_at < :threshold
-                  AND c.line_item_count > 0
-                  AND ca.street IS NOT NULL
-                  AND ca.street != ''
-                  AND o.id IS NULL
-                ORDER BY c.created_at DESC
-                LIMIT {$limit}
-            ";
-
-            $stmt = $this->connection->prepare($sql);
-            $result = $stmt->executeQuery([
-                'threshold' => $threshold->format('Y-m-d H:i:s')
-            ]);
-            
-            $carts = $result->fetchAllAssociative();
+            // Get carts based on Shopware version
+            if ($this->isLegacyCartTable()) {
+                $carts = $this->getCartsLegacy($threshold, $limit);
+            } else {
+                $carts = $this->getCartsModern($threshold, $limit);
+            }
             
             $this->log('info', 'LeadCollect API: Found carts', ['count' => count($carts)]);
 
-            // Format response
-            $formattedCarts = [];
-            foreach ($carts as $cart) {
-                // Parse cart payload for line items
-                $lineItems = $this->parseCartPayload($cart['cart_payload']);
-                
-                // Skip carts with no valid products
-                if (empty($lineItems)) {
-                    continue;
-                }
-
-                $formattedCarts[] = [
-                    'cartToken' => $cart['cart_token'],
-                    'cartTotal' => (float) $cart['cart_total'],
-                    'lineItemCount' => (int) $cart['line_item_count'],
-                    'createdAt' => $cart['cart_created_at'],
-                    'updatedAt' => $cart['cart_updated_at'],
-                    'salesChannelId' => $cart['sales_channel_id'],
-                    'customer' => [
-                        'id' => $cart['customer_id'],
-                        'firstName' => $cart['first_name'],
-                        'lastName' => $cart['last_name'],
-                        'email' => $cart['email'],
-                        'address' => [
-                            'street' => $cart['street'],
-                            'zipcode' => $cart['zipcode'],
-                            'city' => $cart['city'],
-                            'country' => $cart['country_iso'] ?? 'DE'
-                        ]
-                    ],
-                    'lineItems' => $lineItems
-                ];
-            }
-
             return new JsonResponse([
                 'success' => true,
-                'count' => count($formattedCarts),
-                'carts' => $formattedCarts,
+                'count' => count($carts),
+                'carts' => $carts,
                 'queriedAt' => (new \DateTime())->format('c'),
-                'minAgeSeconds' => $minAgeSeconds
+                'minAgeSeconds' => $minAgeSeconds,
+                'shopwareVersion' => $this->isLegacyCartTable() ? '6.5' : '6.6+'
             ]);
 
         } catch (\Exception $e) {
             $this->log('error', 'LeadCollect API: Error fetching carts', [
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
 
             return new JsonResponse([
@@ -169,83 +101,350 @@ class LeadCollectApiController extends AbstractController
     }
 
     /**
-     * Health check endpoint
-     * 
-     * @Route("/api/leadcollect/health", name="api.leadcollect.health", methods={"GET"})
+     * Check if we're using the legacy cart table structure (Shopware 6.5)
+     * Legacy has: customer_id, price, line_item_count columns
+     * Modern (6.6+) only has: token, payload, created_at, etc.
      */
-    public function health(): JsonResponse
+    private function isLegacyCartTable(): bool
     {
-        return new JsonResponse([
-            'status' => 'ok',
-            'plugin' => 'MailCampaignsAbandonedCart',
-            'version' => '1.3.0',
-            'timestamp' => (new \DateTime())->format('c')
-        ]);
+        if ($this->isLegacyCartTable !== null) {
+            return $this->isLegacyCartTable;
+        }
+
+        try {
+            $columns = $this->connection->executeQuery("SHOW COLUMNS FROM cart")->fetchAllAssociative();
+            $columnNames = array_column($columns, 'Field');
+            
+            // Legacy table has customer_id column
+            $this->isLegacyCartTable = in_array('customer_id', $columnNames);
+            
+            $this->log('info', 'Cart table structure detected', [
+                'isLegacy' => $this->isLegacyCartTable,
+                'columns' => $columnNames
+            ]);
+            
+            return $this->isLegacyCartTable;
+        } catch (\Exception $e) {
+            $this->log('warning', 'Could not detect cart table structure', ['error' => $e->getMessage()]);
+            return false;
+        }
     }
 
     /**
-     * Parse cart payload to extract line items
+     * Get carts for Shopware 6.5 (legacy structure)
      */
-    private function parseCartPayload(?string $payload): array
+    private function getCartsLegacy(\DateTime $threshold, int $limit): array
+    {
+        $sql = "
+            SELECT 
+                LOWER(HEX(c.token)) as cart_token,
+                c.price as cart_total,
+                c.line_item_count,
+                c.created_at as cart_created_at,
+                c.payload as cart_payload,
+                LOWER(HEX(cu.id)) as customer_id,
+                cu.first_name,
+                cu.last_name,
+                cu.email,
+                ca.street,
+                ca.zipcode,
+                ca.city,
+                co.iso as country_iso
+            FROM cart c
+            INNER JOIN customer cu ON c.customer_id = cu.id
+            LEFT JOIN customer_address ca ON cu.default_billing_address_id = ca.id
+            LEFT JOIN country co ON ca.country_id = co.id
+            WHERE c.created_at < ?
+              AND c.line_item_count > 0
+              AND ca.street IS NOT NULL
+              AND ca.street != ''
+            ORDER BY c.created_at DESC
+            LIMIT " . (int)$limit;
+
+        $result = $this->connection->executeQuery($sql, [
+            $threshold->format('Y-m-d H:i:s')
+        ]);
+        
+        $carts = $result->fetchAllAssociative();
+        return $this->formatCarts($carts, true);
+    }
+
+    /**
+     * Get carts for Shopware 6.6+ (modern structure)
+     * In 6.6+ the cart table only has token, payload, created_at
+     * We need to extract customer info from the payload
+     */
+    private function getCartsModern(\DateTime $threshold, int $limit): array
+    {
+        // First get all carts older than threshold
+        $sql = "
+            SELECT 
+                token as cart_token,
+                payload as cart_payload,
+                created_at as cart_created_at
+            FROM cart
+            WHERE created_at < ?
+            ORDER BY created_at DESC
+            LIMIT " . (int)$limit;
+
+        $result = $this->connection->executeQuery($sql, [
+            $threshold->format('Y-m-d H:i:s')
+        ]);
+        
+        $rawCarts = $result->fetchAllAssociative();
+        $formattedCarts = [];
+
+        foreach ($rawCarts as $cart) {
+            $cartData = $this->parseModernCartPayload($cart['cart_payload']);
+            
+            if (!$cartData) {
+                continue;
+            }
+
+            // Skip carts without products
+            if (empty($cartData['lineItems'])) {
+                continue;
+            }
+
+            // Skip carts without customer address
+            if (empty($cartData['customer']['address']['street'])) {
+                continue;
+            }
+
+            // Convert binary token to hex if needed
+            $token = $cart['cart_token'];
+            if (!ctype_xdigit($token)) {
+                $token = bin2hex($token);
+            }
+
+            $formattedCarts[] = [
+                'cartToken' => strtolower($token),
+                'cartTotal' => $cartData['price'] ?? 0,
+                'lineItemCount' => count($cartData['lineItems']),
+                'createdAt' => $cart['cart_created_at'],
+                'customer' => $cartData['customer'],
+                'lineItems' => $cartData['lineItems']
+            ];
+        }
+
+        return $formattedCarts;
+    }
+
+    /**
+     * Parse modern cart payload (Shopware 6.6+)
+     * The payload contains everything: customer, items, price
+     */
+    private function parseModernCartPayload(?string $payload): ?array
+    {
+        if (empty($payload)) {
+            return null;
+        }
+
+        try {
+            // Payload might be compressed
+            $decompressed = @gzuncompress($payload);
+            if ($decompressed !== false) {
+                $payload = $decompressed;
+            }
+
+            // Try unserialize first
+            $data = @unserialize($payload);
+            if ($data === false) {
+                // Try JSON
+                $data = @json_decode($payload, true);
+            }
+
+            if (!is_array($data)) {
+                return null;
+            }
+
+            // Extract customer info from payload
+            $customer = [
+                'id' => null,
+                'firstName' => '',
+                'lastName' => '',
+                'email' => '',
+                'address' => [
+                    'street' => '',
+                    'zipcode' => '',
+                    'city' => '',
+                    'country' => 'DE'
+                ]
+            ];
+
+            // In modern carts, customer data might be in different places
+            if (isset($data['customer'])) {
+                $c = $data['customer'];
+                $customer['id'] = $c['id'] ?? null;
+                $customer['firstName'] = $c['firstName'] ?? '';
+                $customer['lastName'] = $c['lastName'] ?? '';
+                $customer['email'] = $c['email'] ?? '';
+                
+                // Address might be in activeBillingAddress or defaultBillingAddress
+                $address = $c['activeBillingAddress'] ?? $c['defaultBillingAddress'] ?? null;
+                if ($address) {
+                    $customer['address'] = [
+                        'street' => $address['street'] ?? '',
+                        'zipcode' => $address['zipcode'] ?? '',
+                        'city' => $address['city'] ?? '',
+                        'country' => $address['country']['iso'] ?? 'DE'
+                    ];
+                }
+            }
+
+            // Extract line items
+            $lineItems = $this->parseLineItems($data);
+
+            // Extract price
+            $price = 0;
+            if (isset($data['price']['totalPrice'])) {
+                $price = (float) $data['price']['totalPrice'];
+            } elseif (isset($data['price']['netPrice'])) {
+                $price = (float) $data['price']['netPrice'];
+            }
+
+            return [
+                'customer' => $customer,
+                'lineItems' => $lineItems,
+                'price' => $price
+            ];
+
+        } catch (\Exception $e) {
+            $this->log('warning', 'Failed to parse modern cart payload', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Format carts from legacy query result
+     */
+    private function formatCarts(array $carts, bool $isLegacy): array
+    {
+        $formattedCarts = [];
+        
+        foreach ($carts as $cart) {
+            $lineItems = $this->parseLineItems($this->decodePayload($cart['cart_payload']));
+            
+            if (empty($lineItems)) {
+                continue;
+            }
+
+            $formattedCarts[] = [
+                'cartToken' => $cart['cart_token'],
+                'cartTotal' => (float) ($cart['cart_total'] ?? 0),
+                'lineItemCount' => (int) ($cart['line_item_count'] ?? count($lineItems)),
+                'createdAt' => $cart['cart_created_at'],
+                'customer' => [
+                    'id' => $cart['customer_id'] ?? null,
+                    'firstName' => $cart['first_name'] ?? '',
+                    'lastName' => $cart['last_name'] ?? '',
+                    'email' => $cart['email'] ?? '',
+                    'address' => [
+                        'street' => $cart['street'] ?? '',
+                        'zipcode' => $cart['zipcode'] ?? '',
+                        'city' => $cart['city'] ?? '',
+                        'country' => $cart['country_iso'] ?? 'DE'
+                    ]
+                ],
+                'lineItems' => $lineItems
+            ];
+        }
+
+        return $formattedCarts;
+    }
+
+    /**
+     * Decode payload (handles compression and serialization)
+     */
+    private function decodePayload(?string $payload): array
     {
         if (empty($payload)) {
             return [];
         }
 
         try {
-            // Try to unserialize (Shopware 6.5)
+            // Try decompression first
+            $decompressed = @gzuncompress($payload);
+            if ($decompressed !== false) {
+                $payload = $decompressed;
+            }
+
+            // Try unserialize
             $data = @unserialize($payload);
-            if ($data === false) {
-                // Try JSON decode (Shopware 6.6+)
-                $data = @json_decode($payload, true);
+            if ($data !== false && is_array($data)) {
+                return $data;
             }
 
-            if (!is_array($data)) {
-                return [];
+            // Try JSON
+            $data = @json_decode($payload, true);
+            if (is_array($data)) {
+                return $data;
             }
 
-            $lineItems = [];
-            $items = $data['lineItems'] ?? $data['line_items'] ?? [];
-            
-            foreach ($items as $item) {
-                // Only include product items
-                $type = $item['type'] ?? '';
-                if ($type !== 'product') {
-                    continue;
-                }
-
-                $price = 0;
-                if (isset($item['price'])) {
-                    if (is_array($item['price'])) {
-                        $price = $item['price']['unitPrice'] ?? $item['price']['totalPrice'] ?? 0;
-                    } else {
-                        $price = (float) $item['price'];
-                    }
-                }
-
-                $imageUrl = null;
-                if (isset($item['cover']['url'])) {
-                    $imageUrl = $item['cover']['url'];
-                } elseif (isset($item['cover']['media']['url'])) {
-                    $imageUrl = $item['cover']['media']['url'];
-                }
-
-                $lineItems[] = [
-                    'name' => $item['label'] ?? $item['name'] ?? 'Produkt',
-                    'sku' => $item['payload']['productNumber'] ?? $item['referencedId'] ?? null,
-                    'productId' => $item['referencedId'] ?? $item['id'] ?? null,
-                    'quantity' => (int) ($item['quantity'] ?? 1),
-                    'price' => (float) $price,
-                    'imageUrl' => $imageUrl
-                ];
-            }
-
-            return $lineItems;
-
+            return [];
         } catch (\Exception $e) {
-            $this->log('warning', 'Failed to parse cart payload', ['error' => $e->getMessage()]);
             return [];
         }
+    }
+
+    /**
+     * Parse line items from cart data
+     */
+    private function parseLineItems(array $data): array
+    {
+        $lineItems = [];
+        $items = $data['lineItems'] ?? $data['line_items'] ?? [];
+        
+        foreach ($items as $item) {
+            // Only include product items
+            $type = $item['type'] ?? '';
+            if ($type !== 'product') {
+                continue;
+            }
+
+            $price = 0;
+            if (isset($item['price'])) {
+                if (is_array($item['price'])) {
+                    $price = $item['price']['unitPrice'] ?? $item['price']['totalPrice'] ?? 0;
+                } else {
+                    $price = (float) $item['price'];
+                }
+            }
+
+            $imageUrl = null;
+            if (isset($item['cover']['url'])) {
+                $imageUrl = $item['cover']['url'];
+            } elseif (isset($item['cover']['media']['url'])) {
+                $imageUrl = $item['cover']['media']['url'];
+            }
+
+            $lineItems[] = [
+                'name' => $item['label'] ?? $item['name'] ?? 'Produkt',
+                'sku' => $item['payload']['productNumber'] ?? $item['referencedId'] ?? null,
+                'productId' => $item['referencedId'] ?? $item['id'] ?? null,
+                'quantity' => (int) ($item['quantity'] ?? 1),
+                'price' => (float) $price,
+                'imageUrl' => $imageUrl
+            ];
+        }
+
+        return $lineItems;
+    }
+
+    /**
+     * Health check endpoint
+     */
+    public function health(): JsonResponse
+    {
+        $isLegacy = $this->isLegacyCartTable();
+        
+        return new JsonResponse([
+            'status' => 'ok',
+            'plugin' => 'MailCampaignsAbandonedCart',
+            'version' => '1.3.0',
+            'shopwareCartStructure' => $isLegacy ? 'legacy (6.5)' : 'modern (6.6+)',
+            'timestamp' => (new \DateTime())->format('c')
+        ]);
     }
 
     /**
