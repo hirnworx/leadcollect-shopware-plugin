@@ -12,9 +12,6 @@ use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
 use Shopware\Core\System\SystemConfig\SystemConfigService;
 use MailCampaigns\AbandonedCart\Core\Checkout\AbandonedCart\AbandonedCartEntity;
 
-/**
- * Service to send webhooks to LeadCollect when cart events occur
- */
 class LeadCollectWebhookService
 {
     private Client $httpClient;
@@ -46,36 +43,23 @@ class LeadCollectWebhookService
         ]);
     }
 
-    /**
-     * Check if webhook is enabled and configured
-     */
     public function isEnabled(?string $salesChannelId = null): bool
     {
         $enabled = $this->systemConfigService->get(self::CONFIG_WEBHOOK_ENABLED, $salesChannelId);
         $webhookUrl = $this->getWebhookUrl($salesChannelId);
-        
         return $enabled && !empty($webhookUrl);
     }
 
-    /**
-     * Get the configured webhook URL
-     */
     private function getWebhookUrl(?string $salesChannelId = null): ?string
     {
         return $this->systemConfigService->get(self::CONFIG_WEBHOOK_URL, $salesChannelId);
     }
 
-    /**
-     * Get the configured webhook secret
-     */
     private function getWebhookSecret(?string $salesChannelId = null): ?string
     {
         return $this->systemConfigService->get(self::CONFIG_WEBHOOK_SECRET, $salesChannelId);
     }
 
-    /**
-     * Send webhook when cart is marked as abandoned
-     */
     public function sendCartAbandonedWebhook(
         AbandonedCartEntity $abandonedCart,
         array $cartData,
@@ -87,22 +71,30 @@ class LeadCollectWebhookService
         }
 
         $customerId = $abandonedCart->getCustomerId();
+        
+        // Load customer data from database
+        $customerData = $this->loadCustomerData($customerId);
+        if (!$customerData || empty($customerData['street'])) {
+            $this->logger->warning('LeadCollect: No customer address found', [
+                'customerId' => $customerId,
+            ]);
+            return false;
+        }
 
-        // Build payload with available data
         $payload = [
             'eventType' => 'cart_abandoned',
             'externalCartId' => $abandonedCart->getCartToken(),
             'externalCustomerId' => $customerId,
             'abandonedAt' => date('c'),
             'customer' => [
-                'firstName' => $cartData['customer_first_name'] ?? 'Kunde',
-                'lastName' => $cartData['customer_last_name'] ?? '',
-                'email' => $cartData['customer_email'] ?? null,
+                'firstName' => $customerData['first_name'] ?? 'Kunde',
+                'lastName' => $customerData['last_name'] ?? '',
+                'email' => $customerData['email'] ?? null,
                 'address' => [
-                    'street' => $cartData['billing_street'] ?? '',
-                    'zipcode' => $cartData['billing_zipcode'] ?? '',
-                    'city' => $cartData['billing_city'] ?? '',
-                    'country' => $cartData['billing_country'] ?? 'DE',
+                    'street' => $customerData['street'] ?? '',
+                    'zipcode' => $customerData['zipcode'] ?? '',
+                    'city' => $customerData['city'] ?? '',
+                    'country' => $customerData['country_iso'] ?? 'DE',
                 ],
             ],
             'cart' => [
@@ -112,7 +104,6 @@ class LeadCollectWebhookService
             ],
         ];
         
-        // Add coupon data if available
         if ($couponData) {
             $payload['coupon'] = [
                 'code' => $couponData['code'] ?? null,
@@ -125,9 +116,6 @@ class LeadCollectWebhookService
         return $this->sendWebhook($payload, $salesChannelId);
     }
 
-    /**
-     * Send webhook when coupon is redeemed
-     */
     public function sendCouponRedeemedWebhook(
         string $couponCode,
         ?string $orderId,
@@ -150,9 +138,6 @@ class LeadCollectWebhookService
         return $this->sendWebhook($payload, $salesChannelId);
     }
 
-    /**
-     * Send webhook when order is placed (for recovery tracking)
-     */
     public function sendOrderPlacedWebhook(
         string $orderId,
         float $orderValue,
@@ -177,9 +162,6 @@ class LeadCollectWebhookService
         return $this->sendWebhook($payload, $salesChannelId);
     }
 
-    /**
-     * Send webhook with retry logic
-     */
     private function sendWebhook(array $payload, ?string $salesChannelId = null): bool
     {
         $webhookUrl = $this->getWebhookUrl($salesChannelId);
@@ -189,7 +171,6 @@ class LeadCollectWebhookService
             return false;
         }
 
-        // Build full URL with secret
         $fullUrl = rtrim($webhookUrl, '/');
         if ($webhookSecret) {
             $fullUrl .= '/' . $webhookSecret;
@@ -238,9 +219,35 @@ class LeadCollectWebhookService
         return false;
     }
 
-    /**
-     * Format line items for webhook payload
-     */
+    private function loadCustomerData(string $customerId): ?array
+    {
+        try {
+            $sql = "
+                SELECT 
+                    c.first_name,
+                    c.last_name,
+                    c.email,
+                    ca.street,
+                    ca.zipcode,
+                    ca.city,
+                    co.iso as country_iso
+                FROM customer c
+                LEFT JOIN customer_address ca ON c.default_billing_address_id = ca.id
+                LEFT JOIN country co ON ca.country_id = co.id
+                WHERE c.id = UNHEX(REPLACE(:customerId, '-', ''))
+            ";
+            
+            $stmt = $this->connection->prepare($sql);
+            $result = $stmt->executeQuery(['customerId' => $customerId]);
+            $data = $result->fetchAssociative();
+            
+            return $data ?: null;
+        } catch (\Exception $e) {
+            $this->logger->error('LeadCollect: Error loading customer', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
     private function formatLineItems(array $lineItems): array
     {
         $formatted = [];
@@ -248,7 +255,6 @@ class LeadCollectWebhookService
         foreach ($lineItems as $item) {
             // Handle LineItem object
             if (is_object($item) && $item instanceof \Shopware\Core\Checkout\Cart\LineItem\LineItem) {
-                // Skip non-product items
                 if ($item->getType() !== 'product') {
                     continue;
                 }
@@ -272,14 +278,12 @@ class LeadCollectWebhookService
                 continue;
             }
             
-            // Handle serialized array format (from jsonSerialize)
+            // Handle serialized array format
             if (is_array($item)) {
-                // Skip non-product items
                 if (($item['type'] ?? '') !== 'product') {
                     continue;
                 }
                 
-                // Extract price - can be array with unitPrice or numeric
                 $price = 0;
                 if (isset($item['price'])) {
                     if (is_array($item['price']) && isset($item['price']['unitPrice'])) {
@@ -289,7 +293,6 @@ class LeadCollectWebhookService
                     }
                 }
                 
-                // Extract image URL
                 $imageUrl = null;
                 if (isset($item['cover'])) {
                     $cover = $item['cover'];
