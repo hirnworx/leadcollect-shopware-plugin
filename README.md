@@ -191,6 +191,43 @@ Gehe zu: **Einstellungen → Erweiterungen → LeadCollect - Abandoned Cart Reco
 
 ---
 
+## ⏰ Cron-Job einrichten (WICHTIG!)
+
+Das Plugin benötigt einen Cron-Job, damit abgebrochene Warenkörbe automatisch erkannt werden:
+
+```bash
+# Crontab bearbeiten
+crontab -e
+
+# Diese Zeile hinzufügen (jede Minute):
+* * * * * cd /pfad/zu/shopware && php bin/console scheduled-task:run --time-limit=50 > /dev/null 2>&1
+```
+
+> ⚠️ **Ohne Cron-Job werden keine abgebrochenen Warenkörbe erkannt!**
+
+---
+
+## 📱 QR-Code Warenkorb-Wiederherstellung
+
+Das Plugin installiert automatisch eine Seite unter `/leadcollect/restore.php`, die:
+
+1. Produkte aus dem QR-Code-Link zum Warenkorb hinzufügt
+2. Den Gutscheincode automatisch einlöst
+3. Den Kunden zur Kasse weiterleitet
+
+**URL-Format:**
+```
+https://dein-shop.de/leadcollect/restore.php?sku=SKU1,SKU2&q=1,2&c=GUTSCHEINCODE
+```
+
+| Parameter | Beschreibung |
+|-----------|--------------|
+| `sku` | Komma-getrennte Artikelnummern |
+| `q` | Komma-getrennte Mengen |
+| `c` | Gutscheincode |
+
+---
+
 ## 🛠️ Console Commands
 
 ```bash
