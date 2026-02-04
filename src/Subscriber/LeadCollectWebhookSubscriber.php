@@ -126,8 +126,8 @@ class LeadCollectWebhookSubscriber implements EventSubscriberInterface
         $cartData = $event->getCartData();
         $couponData = null;
         
-        // Get sales channel ID from event or cart data
-        $salesChannelId = $event->getSalesChannelId() ?? $cartData['salesChannelId'] ?? null;
+        // Get sales channel ID from event or cart data (compatible with Shopware 6.5 and 6.6+)
+        $salesChannelId = (method_exists($event, 'getSalesChannelId') ? $event->getSalesChannelId() : null) ?? $cartData['salesChannelId'] ?? null;
         
         try {
             $couponData = $this->couponService->createCouponCode(
