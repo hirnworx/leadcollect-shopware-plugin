@@ -147,7 +147,46 @@ class LeadCollectWebhookSubscriber implements EventSubscriberInterface
     public function onOrderPlaced(CheckoutOrderPlacedEvent $event): void
     {
         try {
-            $this->webhookService->sendOrderPlacedWebhook($event->getOrder());
-        } catch (\Throwable $e) {}
+            $order = $event->getOrder();
+            
+            // Extract order details
+            $orderId = $order->getId();
+            $orderValue = $order->getAmountTotal();
+            $customerId = $order->getOrderCustomer()?->getCustomerId() ?? '';
+            $customerEmail = $order->getOrderCustomer()?->getEmail();
+            $salesChannelId = $order->getSalesChannelId();
+            
+            // Check if a LeadCollect coupon was used
+            $couponCode = null;
+            foreach ($order->getLineItems() ?? [] as $lineItem) {
+                if ($lineItem->getType() === 'promotion') {
+                    $code = $lineItem->getReferencedId();
+                    if ($code && str_starts_with($code, 'COMEBACK-')) {
+                        $couponCode = $code;
+                        break;
+                    }
+                }
+            }
+            
+            // Send order_placed webhook to LeadCollect
+            $this->webhookService->sendOrderPlacedWebhook(
+                $orderId,
+                $orderValue,
+                $couponCode,
+                $customerId,
+                $customerEmail,
+                $salesChannelId
+            );
+            
+            // Delete the abandoned cart entry if order was placed
+            if ($customerId) {
+                $this->connection->executeStatement(
+                    'DELETE FROM abandoned_cart WHERE customer_id = UNHEX(?)',
+                    [str_replace('-', '', $customerId)]
+                );
+            }
+        } catch (\Throwable $e) {
+            // Silently fail - order should not be blocked
+        }
     }
 }
