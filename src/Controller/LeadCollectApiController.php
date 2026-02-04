@@ -102,13 +102,12 @@ class LeadCollectApiController extends AbstractController
                   AND ca.street != ''
                   AND o.id IS NULL
                 ORDER BY c.created_at DESC
-                LIMIT :limit
+                LIMIT {$limit}
             ";
 
             $stmt = $this->connection->prepare($sql);
             $result = $stmt->executeQuery([
-                'threshold' => $threshold->format('Y-m-d H:i:s'),
-                'limit' => $limit
+                'threshold' => $threshold->format('Y-m-d H:i:s')
             ]);
             
             $carts = $result->fetchAllAssociative();
