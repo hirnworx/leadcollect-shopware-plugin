@@ -97,6 +97,7 @@
         <service id="MailCampaigns\AbandonedCart\Service\CouponService">
             <argument type="service" id="promotion.repository"/>
             <argument type="service" id="promotion_individual_code.repository"/>
+            <argument type="service" id="sales_channel.repository"/>
             <argument type="service" id="Shopware\Core\System\SystemConfig\SystemConfigService"/>
             <argument type="service" id="monolog.logger.business_events" on-invalid="null"/>
         </service>

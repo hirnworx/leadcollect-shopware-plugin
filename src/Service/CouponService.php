@@ -20,6 +20,7 @@ class CouponService
 {
     private EntityRepository $promotionRepository;
     private EntityRepository $promotionIndividualCodeRepository;
+    private EntityRepository $salesChannelRepository;
     private SystemConfigService $systemConfigService;
     private LoggerInterface $logger;
 
@@ -29,16 +30,34 @@ class CouponService
     private const CONFIG_COUPON_MIN_ORDER = 'MailCampaignsAbandonedCart.config.leadCollectCouponMinOrder';
     private const CONFIG_BASE_PROMOTION_ID = 'MailCampaignsAbandonedCart.config.leadCollectBasePromotionId';
 
+    // Storefront sales channel type ID (constant in Shopware)
+    private const STOREFRONT_SALES_CHANNEL_TYPE = '8a243080f92e4c719546314b577cf82b';
+
     public function __construct(
         EntityRepository $promotionRepository,
         EntityRepository $promotionIndividualCodeRepository,
+        EntityRepository $salesChannelRepository,
         SystemConfigService $systemConfigService,
         LoggerInterface $logger
     ) {
         $this->promotionRepository = $promotionRepository;
         $this->promotionIndividualCodeRepository = $promotionIndividualCodeRepository;
+        $this->salesChannelRepository = $salesChannelRepository;
         $this->systemConfigService = $systemConfigService;
         $this->logger = $logger;
+    }
+
+    /**
+     * Get all storefront sales channel IDs
+     */
+    private function getAllStorefrontSalesChannels(Context $context): array
+    {
+        $criteria = new Criteria();
+        $criteria->addFilter(new EqualsFilter('typeId', self::STOREFRONT_SALES_CHANNEL_TYPE));
+        
+        $result = $this->salesChannelRepository->searchIds($criteria, $context);
+        
+        return $result->getIds();
     }
 
     /**
@@ -228,6 +247,26 @@ class CouponService
         $promotionId = Uuid::randomHex();
         $discountId = Uuid::randomHex();
 
+        // Build sales channels array - if specific channel given, use it; otherwise get all storefront channels
+        $salesChannelsData = [];
+        if ($salesChannelId) {
+            $salesChannelsData = [
+                [
+                    'salesChannelId' => $salesChannelId,
+                    'priority' => 1,
+                ],
+            ];
+        } else {
+            // Get all storefront sales channels
+            $allChannels = $this->getAllStorefrontSalesChannels($context);
+            foreach ($allChannels as $channelId) {
+                $salesChannelsData[] = [
+                    'salesChannelId' => $channelId,
+                    'priority' => 1,
+                ];
+            }
+        }
+
         try {
             $this->promotionRepository->create([
                 [
@@ -241,7 +280,7 @@ class CouponService
                     'useIndividualCodes' => true,
                     'individualCodePattern' => 'COMEBACK-%s',
                     'maxRedemptionsGlobal' => null,
-                    'maxRedemptionsPerCustomer' => 1,
+                    'maxRedemptionsPerCustomer' => null, // No customer limit - codes are universal
                     'orderCount' => 0,
                     'discounts' => [
                         [
@@ -252,12 +291,7 @@ class CouponService
                             'considerAdvancedRules' => false,
                         ],
                     ],
-                    'salesChannels' => $salesChannelId ? [
-                        [
-                            'salesChannelId' => $salesChannelId,
-                            'priority' => 1,
-                        ],
-                    ] : [],
+                    'salesChannels' => $salesChannelsData,
                 ],
             ], $context);
 

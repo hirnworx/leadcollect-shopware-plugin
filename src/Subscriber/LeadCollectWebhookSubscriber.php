@@ -126,8 +126,15 @@ class LeadCollectWebhookSubscriber implements EventSubscriberInterface
         $cartData = $event->getCartData();
         $couponData = null;
         
+        // Get sales channel ID from event or cart data
+        $salesChannelId = $event->getSalesChannelId() ?? $cartData['salesChannelId'] ?? null;
+        
         try {
-            $couponData = $this->couponService->createCouponCode($abandonedCart->getCustomerId(), $abandonedCart->getCartToken(), null);
+            $couponData = $this->couponService->createCouponCode(
+                $abandonedCart->getCustomerId() ?? 'guest',
+                $abandonedCart->getCartToken(),
+                $salesChannelId
+            );
         } catch (\Throwable $e) {}
 
         try {
