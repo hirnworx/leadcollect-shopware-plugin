@@ -115,5 +115,22 @@
             <argument type="service" id="MailCampaigns\AbandonedCart\Service\CouponService"/>
             <tag name="kernel.event_subscriber"/>
         </service>
+
+        <!-- ========================================== -->
+        <!-- LeadCollect Cart Restore Controller       -->
+        <!-- ========================================== -->
+
+        <!-- Cart Restore Controller for QR Code Links -->
+        <service id="MailCampaigns\AbandonedCart\Controller\CartRestoreController" public="true">
+            <argument type="service" id="Doctrine\DBAL\Connection"/>
+            <argument type="service" id="Shopware\Core\Checkout\Cart\SalesChannel\CartService"/>
+            <argument type="service" id="monolog.logger.business_events" on-invalid="null"/>
+            <call method="setContainer">
+                <argument type="service" id="service_container"/>
+            </call>
+            <call method="setTwig">
+                <argument type="service" id="twig"/>
+            </call>
+        </service>
     </services>
 </container>

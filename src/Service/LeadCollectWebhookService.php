@@ -85,6 +85,7 @@ class LeadCollectWebhookService
             'eventType' => 'cart_abandoned',
             'externalCartId' => $abandonedCart->getCartToken(),
             'externalCustomerId' => $customerId,
+            'cartToken' => $abandonedCart->getCartToken(),  // For QR code cart restoration
             'abandonedAt' => date('c'),
             'customer' => [
                 'firstName' => $customerData['first_name'] ?? 'Kunde',
