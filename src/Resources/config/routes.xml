@@ -44,4 +44,14 @@
         </default>
     </route>
 
+    <!-- LeadCollect API: Create coupon - PUBLIC but secured by secret -->
+    <route id="frontend.leadcollect.api.coupon" path="/leadcollect-api/coupon" methods="POST">
+        <default key="_controller">MailCampaigns\AbandonedCart\Controller\LeadCollectApiController::createCoupon</default>
+        <default key="_routeScope">
+            <list>
+                <string>storefront</string>
+            </list>
+        </default>
+    </route>
+
 </routes>

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MailCampaigns\AbandonedCart\Controller;
 
 use Doctrine\DBAL\Connection;
+use MailCampaigns\AbandonedCart\Service\CouponService;
 use Shopware\Core\System\SystemConfig\SystemConfigService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -12,7 +13,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Psr\Log\LoggerInterface;
 
 /**
- * API Controller for LeadCollect to fetch abandoned carts
+ * API Controller for LeadCollect to fetch abandoned carts and create coupons
  * This is a PUBLIC endpoint secured by webhook secret
  * 
  * Compatible with Shopware 6.5 and 6.6+
@@ -22,6 +23,7 @@ class LeadCollectApiController extends AbstractController
     private Connection $connection;
     private SystemConfigService $systemConfigService;
     private ?LoggerInterface $logger;
+    private ?CouponService $couponService;
     private ?bool $isLegacyCartTable = null;
 
     private const CONFIG_WEBHOOK_SECRET = 'MailCampaignsAbandonedCart.config.leadCollectWebhookSecret';
@@ -29,11 +31,13 @@ class LeadCollectApiController extends AbstractController
     public function __construct(
         Connection $connection,
         SystemConfigService $systemConfigService,
-        ?LoggerInterface $logger = null
+        ?LoggerInterface $logger = null,
+        ?CouponService $couponService = null
     ) {
         $this->connection = $connection;
         $this->systemConfigService = $systemConfigService;
         $this->logger = $logger;
+        $this->couponService = $couponService;
     }
 
     /**
@@ -518,10 +522,97 @@ class LeadCollectApiController extends AbstractController
         return new JsonResponse([
             'status' => 'ok',
             'plugin' => 'MailCampaignsAbandonedCart',
-            'version' => '1.4.1',
+            'version' => '1.4.2',
             'shopwareCartStructure' => $isLegacy ? 'legacy (6.5)' : 'modern (6.6+)',
             'timestamp' => (new \DateTime())->format('c')
         ]);
+    }
+
+    /**
+     * Create a coupon code for abandoned cart recovery
+     * Called by LeadCollect before sending a letter
+     * 
+     * POST /leadcollect-api/coupon
+     * Body: { "cartToken": "...", "customerId": "..." }
+     */
+    public function createCoupon(Request $request): JsonResponse
+    {
+        // Verify secret
+        $secret = $request->query->get('secret') ?? $request->headers->get('X-LeadCollect-Secret');
+        $expectedSecret = $this->systemConfigService->get(self::CONFIG_WEBHOOK_SECRET);
+        
+        if (!$secret || !$expectedSecret || $secret !== $expectedSecret) {
+            return new JsonResponse([
+                'success' => false,
+                'error' => 'Invalid or missing secret'
+            ], 401);
+        }
+
+        if (!$this->couponService) {
+            return new JsonResponse([
+                'success' => false,
+                'error' => 'CouponService not available'
+            ], 500);
+        }
+
+        try {
+            $data = json_decode($request->getContent(), true) ?? [];
+            
+            $cartToken = $data['cartToken'] ?? null;
+            $customerId = $data['customerId'] ?? 'guest';
+            
+            if (!$cartToken) {
+                return new JsonResponse([
+                    'success' => false,
+                    'error' => 'cartToken is required'
+                ], 400);
+            }
+
+            $this->log('info', 'LeadCollect API: Creating coupon', [
+                'cartToken' => $cartToken,
+                'customerId' => $customerId
+            ]);
+
+            // Create coupon using the CouponService
+            $couponData = $this->couponService->createCouponCode(
+                $customerId,
+                $cartToken,
+                null // salesChannelId - will use all storefront channels
+            );
+
+            if (!$couponData) {
+                return new JsonResponse([
+                    'success' => false,
+                    'error' => 'Failed to create coupon'
+                ], 500);
+            }
+
+            $this->log('info', 'LeadCollect API: Coupon created', [
+                'code' => $couponData['code'],
+                'type' => $couponData['type'],
+                'value' => $couponData['value']
+            ]);
+
+            return new JsonResponse([
+                'success' => true,
+                'coupon' => [
+                    'code' => $couponData['code'],
+                    'type' => $couponData['type'],
+                    'value' => $couponData['value'],
+                    'validUntil' => $couponData['validUntil']->format('Y-m-d')
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            $this->log('error', 'LeadCollect API: Error creating coupon', [
+                'error' => $e->getMessage()
+            ]);
+
+            return new JsonResponse([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
