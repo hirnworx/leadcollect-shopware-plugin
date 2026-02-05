@@ -354,7 +354,7 @@ class LeadCollectApiController extends AbstractController
     }
 
     /**
-     * Decode payload (handles compression and serialization)
+     * Decode payload (handles compression, serialization, and Shopware Cart objects)
      */
     private function decodePayload(?string $payload): array
     {
@@ -371,6 +371,12 @@ class LeadCollectApiController extends AbstractController
 
             // Try unserialize
             $data = @unserialize($payload);
+            
+            // Handle Shopware Cart object (common in Shopware 6.5)
+            if ($data !== false && is_object($data)) {
+                return $this->convertCartObjectToArray($data);
+            }
+            
             if ($data !== false && is_array($data)) {
                 return $data;
             }
@@ -383,8 +389,79 @@ class LeadCollectApiController extends AbstractController
 
             return [];
         } catch (\Exception $e) {
+            $this->log('warning', 'Failed to decode payload', ['error' => $e->getMessage()]);
             return [];
         }
+    }
+
+    /**
+     * Convert a Shopware Cart object to an array for processing
+     */
+    private function convertCartObjectToArray(object $cartObject): array
+    {
+        $result = ['lineItems' => []];
+
+        try {
+            // Check if it's a Shopware Cart object
+            if (method_exists($cartObject, 'getLineItems')) {
+                $lineItems = $cartObject->getLineItems();
+                
+                foreach ($lineItems as $item) {
+                    // Only process product items
+                    if (method_exists($item, 'getType') && $item->getType() !== 'product') {
+                        continue;
+                    }
+
+                    $lineItem = [
+                        'type' => 'product',
+                        'label' => method_exists($item, 'getLabel') ? $item->getLabel() : 'Produkt',
+                        'quantity' => method_exists($item, 'getQuantity') ? $item->getQuantity() : 1,
+                        'referencedId' => method_exists($item, 'getReferencedId') ? $item->getReferencedId() : null,
+                    ];
+
+                    // Get price
+                    if (method_exists($item, 'getPrice') && $item->getPrice() !== null) {
+                        $priceObj = $item->getPrice();
+                        $lineItem['price'] = [
+                            'unitPrice' => method_exists($priceObj, 'getUnitPrice') ? $priceObj->getUnitPrice() : 0,
+                            'totalPrice' => method_exists($priceObj, 'getTotalPrice') ? $priceObj->getTotalPrice() : 0,
+                        ];
+                    }
+
+                    // Get product number from payload
+                    if (method_exists($item, 'getPayloadValue')) {
+                        $productNumber = $item->getPayloadValue('productNumber');
+                        if ($productNumber) {
+                            $lineItem['payload'] = ['productNumber' => $productNumber];
+                        }
+                    }
+
+                    // Get cover image
+                    if (method_exists($item, 'getCover') && $item->getCover() !== null) {
+                        $cover = $item->getCover();
+                        if (method_exists($cover, 'getUrl')) {
+                            $lineItem['cover'] = ['url' => $cover->getUrl()];
+                        }
+                    }
+
+                    $result['lineItems'][] = $lineItem;
+                }
+            }
+
+            // Get price info
+            if (method_exists($cartObject, 'getPrice') && $cartObject->getPrice() !== null) {
+                $priceObj = $cartObject->getPrice();
+                $result['price'] = [
+                    'totalPrice' => method_exists($priceObj, 'getTotalPrice') ? $priceObj->getTotalPrice() : 0,
+                    'netPrice' => method_exists($priceObj, 'getNetPrice') ? $priceObj->getNetPrice() : 0,
+                ];
+            }
+
+        } catch (\Exception $e) {
+            $this->log('warning', 'Failed to convert Cart object', ['error' => $e->getMessage()]);
+        }
+
+        return $result;
     }
 
     /**
@@ -441,7 +518,7 @@ class LeadCollectApiController extends AbstractController
         return new JsonResponse([
             'status' => 'ok',
             'plugin' => 'MailCampaignsAbandonedCart',
-            'version' => '1.3.0',
+            'version' => '1.4.1',
             'shopwareCartStructure' => $isLegacy ? 'legacy (6.5)' : 'modern (6.6+)',
             'timestamp' => (new \DateTime())->format('c')
         ]);
