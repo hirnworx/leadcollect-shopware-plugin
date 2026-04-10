@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<routes xmlns="http://symfony.com/schema/routing"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://symfony.com/schema/routing
+        https://symfony.com/schema/routing/routing-1.0.xsd">
+
+    <!-- Token-based restore (original) -->
+    <route id="frontend.leadcollect.cart.restore" path="/leadcollect-restore" methods="GET">
+        <default key="_controller">MailCampaigns\AbandonedCart\Controller\CartRestoreController::restore</default>
+        <default key="_routeScope">
+            <list>
+                <string>storefront</string>
+            </list>
+        </default>
+    </route>
+
+    <!-- SKU-based restore (for QR codes on postcards) -->
+    <route id="frontend.leadcollect.cart.restore.sku" path="/leadcollect/restore" methods="GET">
+        <default key="_controller">MailCampaigns\AbandonedCart\Controller\CartRestoreController::restoreBySku</default>
+        <default key="_routeScope">
+            <list>
+                <string>storefront</string>
+            </list>
+        </default>
+    </route>
+
+    <!-- LeadCollect API: Get abandoned carts (for polling) - PUBLIC but secured by secret -->
+    <route id="frontend.leadcollect.api.carts" path="/leadcollect-api/carts" methods="GET">
+        <default key="_controller">MailCampaigns\AbandonedCart\Controller\LeadCollectApiController::getCarts</default>
+        <default key="_routeScope">
+            <list>
+                <string>storefront</string>
+            </list>
+        </default>
+    </route>
+
+    <!-- LeadCollect API: Health check - PUBLIC -->
+    <route id="frontend.leadcollect.api.health" path="/leadcollect-api/health" methods="GET">
+        <default key="_controller">MailCampaigns\AbandonedCart\Controller\LeadCollectApiController::health</default>
+        <default key="_routeScope">
+            <list>
+                <string>storefront</string>
+            </list>
+        </default>
+    </route>
+
+    <!-- LeadCollect API: Create coupon - PUBLIC but secured by secret -->
+    <route id="frontend.leadcollect.api.coupon" path="/leadcollect-api/coupon" methods="POST">
+        <default key="_controller">MailCampaigns\AbandonedCart\Controller\LeadCollectApiController::createCoupon</default>
+        <default key="_routeScope">
+            <list>
+                <string>storefront</string>
+            </list>
+        </default>
+    </route>
+
+</routes>
